@@ -26,3 +26,13 @@ dev = [
     "ruff>=0.15.15",
 ]
 
+[tool.ruff]
+line-length = 88
+src = ["src", "tests", "examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "F722", "F821", # fix false positives for jaxtyping
+    "E501" # disable line length errors
+]

@@ -1,11 +1,10 @@
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 import optax
 
-from maxwellgp import GaussianProcess, FullMaxwellKernel
+from maxwellgp import FullMaxwellKernel, GaussianProcess
 from maxwellgp.utils import normalize
-
 
 # Enable x64
 jax.config.update("jax_enable_x64", True)
@@ -107,7 +106,8 @@ def main():
             mu_train = model.posterior_mean(X_train, y_train_flat)
             train_rmse = jnp.sqrt(jnp.mean((mu_train.real - y_train_flat.real) ** 2))
             print(
-                f"[{i:04d}] NLML: {loss_val.item():.4e} | eps: {noise_val:.2e} | Train RMSE: {train_rmse:.4e}"
+                f"[{i:04d}] NLML: {loss_val.item():.4e} | "
+                f"eps: {noise_val:.2e} | Train RMSE: {train_rmse:.4e}"
             )
 
     # 6. Eval

@@ -1,7 +1,7 @@
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
-from jaxtyping import Array, Float, Complex
+from jaxtyping import Array, Complex, Float
 
 from maxwellgp.utils import fibonacci_sphere, normalize
 

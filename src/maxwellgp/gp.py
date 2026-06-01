@@ -1,7 +1,7 @@
-from jaxtyping import Array, Float
 import equinox as eqx
-import jax.numpy as jnp
 import jax
+import jax.numpy as jnp
+from jaxtyping import Array, Float
 
 from maxwellgp.kernel import FullMaxwellKernel
 

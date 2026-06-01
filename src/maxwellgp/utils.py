@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from jaxtyping import Array, UInt, Float
+from jaxtyping import Array, Float, UInt
 
 
 def fibonacci_sphere(n: UInt, dtype=jnp.float64) -> Float[Array, "n 3"]:
