@@ -3,9 +3,8 @@ import jax.numpy as jnp
 import equinox as eqx
 import optax
 
-from utils import normalize
-from kernel import MaxwellKernel
-from GP import GaussianProcess
+from maxwellgp import GaussianProcess, FullMaxwellKernel
+from maxwellgp.utils import normalize
 
 
 # Enable x64
@@ -43,7 +42,7 @@ def main():
     y_train_flat = y_truth_matrix[indices].reshape(-1, 1)
 
     # 2. Model Init
-    kernel = MaxwellKernel(n_spectral=12, omega=omega, key=k2)
+    kernel = FullMaxwellKernel(n_spectral=12, omega=omega, key=k2)
     # Note: We pass X_train, but it is stored as a static field now
     model = GaussianProcess(kernel, X_train, log_eps_init=-12.0)
 

@@ -2,7 +2,6 @@ import jax.numpy as jnp
 from jaxtyping import Array, UInt, Float
 
 
-
 def fibonacci_sphere(n: UInt, dtype=jnp.float64) -> Float[Array, "n 3"]:
     k = jnp.arange(n, dtype=dtype) + 0.5
     golden_ratio = (1.0 + jnp.sqrt(5.0)) / 2.0

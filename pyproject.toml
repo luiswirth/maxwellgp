@@ -1,8 +1,12 @@
 [project]
 name = "maxwellgp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Ehrenpreis Palamodov Gaussian Process for Maxwell's Equations"
 readme = "README.md"
+authors = [
+    { name = "Félix Vittori", email = "vittorifelix@gmail.com" },
+    { name = "Luis Wirth", email = "lwirth2000@gmail.com" },
+]
 requires-python = ">=3.12"
 dependencies = [
     "equinox>=0.13.2",
@@ -12,3 +16,8 @@ dependencies = [
     "optax>=0.2.6",
     "torch>=2.0.0",
 ]
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+

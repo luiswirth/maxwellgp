@@ -3,10 +3,10 @@ import jax.numpy as jnp
 import equinox as eqx
 from jaxtyping import Array, Float, Complex
 
-from utils import fibonacci_sphere, normalize   
+from maxwellgp.utils import fibonacci_sphere, normalize   
 
 
-class PolarLightConeFeatureMap(eqx.Module):
+class FullMaxwellFeatureMap(eqx.Module):
     base_dirs_raw: Float[Array, "n_spectral 3"]
     omega: float = eqx.field(static=True)
     n_spectral: int = eqx.field(static=True)
@@ -75,10 +75,11 @@ class PolarLightConeFeatureMap(eqx.Module):
         return feat.reshape(self.n_spectral * self.n_pol, N * 6)
 
 
-class MaxwellKernel(eqx.Module):
-    feature_map: PolarLightConeFeatureMap
+class FullMaxwellKernel(eqx.Module):
+    feature_map: FullMaxwellFeatureMap
     log_w: Float[Array, "F"]
 
     def __init__(self, n_spectral: int, omega: float, key=None):
-        self.feature_map = PolarLightConeFeatureMap(n_spectral, omega, key, init_jitter=0.0)
+        self.feature_map = FullMaxwellFeatureMap(n_spectral, omega, key, init_jitter=0.0)
         self.log_w = jnp.zeros(n_spectral * 2, dtype=jnp.float64)
+        

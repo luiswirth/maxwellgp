@@ -3,25 +3,25 @@ import equinox as eqx
 import jax.numpy as jnp 
 import jax
 
-from kernel import MaxwellKernel
+from maxwellgp.kernel import FullMaxwellKernel
 
 
 class GaussianProcess(eqx.Module):
-    kernel: MaxwellKernel
-    X: Float[Array, "N 3"] = eqx.field(static=True) # Data is static relative to gradients
-    num_data: int = eqx.field(static=True)
+    kernel: FullMaxwellKernel
+    X: Float[Array, "N D"] = eqx.field(static=True)
     log_eps: Float[Array, "1"] # Learned noise parameter
 
-    def __init__(self, kernel: MaxwellKernel, X: Array, log_eps_init: float = -12.0):
+    def __init__(self, kernel: FullMaxwellKernel, X: Array, log_eps_init: float = -12.0):
         self.kernel = kernel
         self.X = X
-        self.num_data = X.shape[0] * 6
         self.log_eps = jnp.array([log_eps_init], dtype=jnp.float64)
 
+    # TODO: don't hardcode jitter. scale it appropriatly!
     def compute_A_and_Phi(self, jitter=1e-6):
         Phi = self.kernel.feature_map(self.X)
         W_diag = jnp.exp(self.kernel.log_w).astype(jnp.complex128)
         # Low-rank update structure usually safer with jitter on diagonal
+        # TODO: fix implicit sigma^2=1. use log_eps!(nlml already does) BUG!
         A = jnp.diag(W_diag) + Phi @ Phi.conj().T + jitter * jnp.eye(Phi.shape[0])
         return A, Phi
 
