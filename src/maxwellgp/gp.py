@@ -1,35 +1,39 @@
+from typing import Protocol
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Complex, Float
 
-from maxwellgp.kernel import FullMaxwellKernel
+
+class MaxwellKernelLike(Protocol):
+    log_w: Float[Array, "F"]
+
+    def feature_map(self, X: Float[Array, "N D"]) -> Complex[Array, "F M"]: ...
 
 
 class GaussianProcess(eqx.Module):
-    kernel: FullMaxwellKernel
-    X: Float[Array, "N D"] = eqx.field(static=True)
+    kernel: MaxwellKernelLike
     log_eps: Float[Array, "1"]  # Learned noise parameter
 
-    def __init__(
-        self, kernel: FullMaxwellKernel, X: Array, log_eps_init: float = -12.0
-    ):
+    def __init__(self, kernel: MaxwellKernelLike, log_eps_init: float = -12.0):
         self.kernel = kernel
-        self.X = X
         self.log_eps = jnp.array([log_eps_init], dtype=jnp.float64)
 
     # TODO: don't hardcode jitter. scale it appropriatly!
-    def compute_A_and_Phi(self, jitter=1e-6):
-        Phi = self.kernel.feature_map(self.X)
+    def compute_A_and_Phi(self, X: Float[Array, "N D"], jitter=1e-6):
+        Phi = self.kernel.feature_map(X)
         W_diag = jnp.exp(self.kernel.log_w).astype(jnp.complex128)
         # Low-rank update structure usually safer with jitter on diagonal
         # TODO: fix implicit sigma^2=1. use log_eps!(nlml already does) BUG!
         A = jnp.diag(W_diag) + Phi @ Phi.conj().T + jitter * jnp.eye(Phi.shape[0])
         return A, Phi
 
-    def nlml(self, y: Array) -> Array:
+    def nlml(
+        self, X: Float[Array, "N D"], y: Complex[Array, "M 1"]
+    ) -> Float[Array, ""]:
         y = y.astype(jnp.complex128)
-        A, Phi = self.compute_A_and_Phi()
+        A, Phi = self.compute_A_and_Phi(X)
         L = jax.scipy.linalg.cholesky(A, lower=True)
 
         # alpha = A^{-1} Phi y
@@ -48,9 +52,14 @@ class GaussianProcess(eqx.Module):
 
         return term1 + term2 + term3
 
-    def posterior_mean(self, X_query: Array, y_train: Array) -> Array:
+    def posterior_mean(
+        self,
+        X_query: Float[Array, "Nq D"],
+        X_train: Float[Array, "N D"],
+        y_train: Complex[Array, "M 1"],
+    ) -> Complex[Array, "Mq 1"]:
         y = y_train.astype(jnp.complex128)
-        A, Phi_x = self.compute_A_and_Phi()
+        A, Phi_x = self.compute_A_and_Phi(X_train)
         Phi_q = self.kernel.feature_map(X_query)
 
         L = jax.scipy.linalg.cholesky(A, lower=True)

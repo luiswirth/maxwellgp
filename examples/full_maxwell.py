@@ -30,7 +30,7 @@ def get_ground_truth(X, omega):
 
 def main():
     key = jax.random.PRNGKey(42)
-    k1, k2, k3 = jax.random.split(key, 3)
+    k1, k2 = jax.random.split(key, 2)
 
     # 1. Data Gen
     omega = 2.0 * jnp.pi
@@ -48,15 +48,11 @@ def main():
     # 2. Model Init
     kernel = FullMaxwellKernel(n_spectral=12, omega=omega, key=k2)
     # Note: We pass X_train, but it is stored as a static field now
-    model = GaussianProcess(kernel, X_train, log_eps_init=-12.0)
+    model = GaussianProcess(kernel, log_eps_init=-12.0)
 
     # 3. Optimizer Setup
     # We partition parameters to apply different settings
     lr_map, lr_gp = 2e-3, 5e-3
-
-    # Define labels for the partition
-    def param_partition(param):
-        return "gp"  # Default
 
     # More robust: filter by instance
     filter_spec = jax.tree.map(lambda _: "gp", model)
@@ -80,9 +76,9 @@ def main():
 
     # 4. Update Step
     @eqx.filter_jit
-    def step(model, opt_state, y):
+    def step(model, opt_state, X, y):
         def loss_fn(m):
-            return m.nlml(y)
+            return m.nlml(X, y)
 
         loss, grads = eqx.filter_value_and_grad(loss_fn)(model)
         updates, new_opt_state = optim.update(grads, opt_state, model)
@@ -99,11 +95,11 @@ def main():
     # 5. Loop
     print(f"Training on {n_train} points...")
     for i in range(1001):
-        loss_val, model, opt_state = step(model, opt_state, y_train_flat)
+        loss_val, model, opt_state = step(model, opt_state, X_train, y_train_flat)
 
         if i % 100 == 0:
             noise_val = jnp.exp(model.log_eps)[0]
-            mu_train = model.posterior_mean(X_train, y_train_flat)
+            mu_train = model.posterior_mean(X_train, X_train, y_train_flat)
             train_rmse = jnp.sqrt(jnp.mean((mu_train.real - y_train_flat.real) ** 2))
             print(
                 f"[{i:04d}] NLML: {loss_val.item():.4e} | "
@@ -111,12 +107,8 @@ def main():
             )
 
     # 6. Eval
-    mu_flat = model.posterior_mean(X_total, y_train_flat)
+    mu_flat = model.posterior_mean(X_total, X_train, y_train_flat)
     mu_matrix = mu_flat.reshape(X_total.shape[0], 6)
     diff = mu_matrix - y_truth_matrix
     rmse_complex = jnp.sqrt(jnp.mean((diff.conj() * diff).real))
     print(f"\nFinal RMSE (Complex): {rmse_complex.item():.4e}")
-
-
-if __name__ == "__main__":
-    main()
