@@ -1,9 +1,17 @@
+from typing import Protocol
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Complex, Float
 
 from maxwellgp.utils import fibonacci_sphere, normalize
+
+
+class MaxwellKernelLike(Protocol):
+    log_weights: Float[Array, "F"]
+
+    def feature_map(self, X: Float[Array, "N D"]) -> Complex[Array, "F M"]: ...
 
 
 class FullMaxwellFeatureMap(eqx.Module):
@@ -80,13 +88,13 @@ class FullMaxwellFeatureMap(eqx.Module):
 
 class FullMaxwellKernel(eqx.Module):
     feature_map: FullMaxwellFeatureMap
-    log_w: Float[Array, "F"]
+    log_weights: Float[Array, "F"]
 
     def __init__(self, n_spectral: int, omega: float, key=None):
         self.feature_map = FullMaxwellFeatureMap(
             n_spectral, omega, key, init_jitter=0.0
         )
-        self.log_w = jnp.zeros(n_spectral * 2, dtype=jnp.float64)
+        self.log_weights = jnp.zeros(n_spectral * 2, dtype=jnp.float64)
 
 
 class TangentialMaxwellFeatureMap(eqx.Module):
@@ -160,8 +168,8 @@ class TangentialMaxwellFeatureMap(eqx.Module):
 
 class TangentialMaxwellKernel(eqx.Module):
     feature_map: TangentialMaxwellFeatureMap
-    log_w: Float[Array, "F"]
+    log_weights: Float[Array, "F"]  # prior weights
 
     def __init__(self, n_spectral: int, omega: float, key=None):
         self.feature_map = TangentialMaxwellFeatureMap(n_spectral, omega, key)
-        self.log_w = jnp.zeros(n_spectral * 2, dtype=jnp.float64)
+        self.log_weights = jnp.zeros(n_spectral * 2, dtype=jnp.float64)

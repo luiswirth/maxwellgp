@@ -48,7 +48,7 @@ def main():
     # 2. Model Init
     kernel = FullMaxwellKernel(n_spectral=12, omega=omega, key=k2)
     # Note: We pass X_train, but it is stored as a static field now
-    model = GaussianProcess(kernel, log_eps_init=-12.0)
+    model = GaussianProcess(kernel, log_noise=-12.0)
 
     # 3. Optimizer Setup
     # We partition parameters to apply different settings
@@ -85,9 +85,9 @@ def main():
         new_model = eqx.apply_updates(model, updates)
 
         new_model = eqx.tree_at(
-            lambda m: m.kernel.log_w,
+            lambda m: m.kernel.log_weights,
             new_model,
-            jnp.clip(new_model.kernel.log_w, -20.0, 10.0),
+            jnp.clip(new_model.kernel.log_weights, -20.0, 10.0),
         )
 
         return loss, new_model, new_opt_state
@@ -98,7 +98,7 @@ def main():
         loss_val, model, opt_state = step(model, opt_state, X_train, y_train_flat)
 
         if i % 100 == 0:
-            noise_val = jnp.exp(model.log_eps)
+            noise_val = jnp.exp(model.log_noise)
             mu_train = model.posterior_mean(X_train, X_train, y_train_flat)
             train_rmse = jnp.sqrt(jnp.mean((mu_train.real - y_train_flat.real) ** 2))
             print(
