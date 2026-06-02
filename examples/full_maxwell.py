@@ -98,7 +98,7 @@ def main():
         loss_val, model, opt_state = step(model, opt_state, X_train, y_train_flat)
 
         if i % 100 == 0:
-            noise_val = jnp.exp(model.log_eps)[0]
+            noise_val = jnp.exp(model.log_eps)
             mu_train = model.posterior_mean(X_train, X_train, y_train_flat)
             train_rmse = jnp.sqrt(jnp.mean((mu_train.real - y_train_flat.real) ** 2))
             print(
@@ -112,3 +112,7 @@ def main():
     diff = mu_matrix - y_truth_matrix
     rmse_complex = jnp.sqrt(jnp.mean((diff.conj() * diff).real))
     print(f"\nFinal RMSE (Complex): {rmse_complex.item():.4e}")
+
+
+if __name__ == "__main__":
+    main()

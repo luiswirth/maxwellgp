@@ -144,15 +144,18 @@ class TangentialMaxwellFeatureMap(eqx.Module):
         # k_exp: (R, 1, 3), pols: (R, 2, 3)
         cross_k_pi = jnp.cross(k_vec[:, None, :], pols, axis=-1)
 
-        # E0: (R,2,3) transverse amplitudes (same construction as Felix)
+        # E0: (R,2,3) transverse amplitudes
         E0 = -cross_k_pi
 
-        # normals = X[:, 3:]            # (N,3)
-        # nxE = cross(normals, E0)      # (R,2,N,3)  — per-point because normal varies
-        nxE = jnp.cross(X[:, 3:][None, None, :, :], E0[:, :, None, :], axis=-1)
+        # Projection tangential trace:  pi_t E = E - (E . n) n
+        normals = X[:, 3:][None, None, :, :]  # (1,1,N,3)
+        E0_b = E0[:, :, None, :]  # (R,2,1,3)
+        dot_En = jnp.sum(E0_b * normals, axis=-1, keepdims=True)  # (R,2,N,1)
+        tE = E0_b - dot_En * normals  # (R,2,N,3)
+
         phases = jnp.exp(1j * (X[:, :3] @ k_vec.T))  # (N,R)
-        feat = jnp.einsum("rpnc,nr->rpnc", nxE, phases)
-        return feat.reshape(self.n_spectral * self.n_pol, N * 3)  # (F, 3N), B dropped
+        feat = jnp.einsum("rpnc,nr->rpnc", tE, phases)
+        return feat.reshape(self.n_spectral * self.n_pol, N * 3)  # (F, 3N)
 
 
 class TangentialMaxwellKernel(eqx.Module):

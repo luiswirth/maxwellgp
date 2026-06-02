@@ -14,19 +14,25 @@ class MaxwellKernelLike(Protocol):
 
 class GaussianProcess(eqx.Module):
     kernel: MaxwellKernelLike
-    log_eps: Float[Array, "1"]  # Learned noise parameter
+    log_eps: Float[Array, ""]  # Learned noise parameter
 
     def __init__(self, kernel: MaxwellKernelLike, log_eps_init: float = -12.0):
         self.kernel = kernel
-        self.log_eps = jnp.array([log_eps_init], dtype=jnp.float64)
+        self.log_eps = jnp.array(log_eps_init, dtype=jnp.float64)
 
-    # TODO: don't hardcode jitter. scale it appropriatly!
     def compute_A_and_Phi(self, X: Float[Array, "N D"], jitter=1e-6):
         Phi = self.kernel.feature_map(X)
         W_diag = jnp.exp(self.kernel.log_w).astype(jnp.complex128)
-        # Low-rank update structure usually safer with jitter on diagonal
-        # TODO: fix implicit sigma^2=1. use log_eps!(nlml already does) BUG!
-        A = jnp.diag(W_diag) + Phi @ Phi.conj().T + jitter * jnp.eye(Phi.shape[0])
+        # TODO: fix regularization
+        # noise_var = jnp.exp(self.log_eps)
+        noise_var = 1.0
+
+        # posterior precision: prior + (1/sigma^2) Phi Phi^H
+        A = (
+            jnp.diag(W_diag)
+            + (Phi @ Phi.conj().T) / noise_var
+            + jitter * jnp.eye(Phi.shape[0])  # regularization for near-singular
+        )
         return A, Phi
 
     def nlml(
@@ -39,14 +45,14 @@ class GaussianProcess(eqx.Module):
         # alpha = A^{-1} Phi y
         alpha = jax.scipy.linalg.cho_solve((L, True), Phi @ y)
 
-        noise_std = jnp.exp(self.log_eps)[0]
+        noise_var = jnp.exp(self.log_eps)
 
         # Data fit term (Negative Log Likelihood part)
         y_norm2 = (y.conj().T @ y).real.squeeze()
         Fy = Phi.conj().T @ alpha
         quad = (Fy.conj().T @ Fy).real.squeeze()
 
-        term1 = (0.5 / noise_std) * (y_norm2 - quad)
+        term1 = (0.5 / noise_var) * (y_norm2 - quad)
         term2 = jnp.sum(jnp.log(jnp.diagonal(L).real))
         term3 = 0.5 * jnp.sum(jnp.exp(self.kernel.log_w))
 
