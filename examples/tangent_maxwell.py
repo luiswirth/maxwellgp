@@ -1,3 +1,5 @@
+import os
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -28,42 +30,48 @@ def tangential_projection(v, n):
     return v - np.dot(v, n) * n
 
 
-SEMIAXES = np.array([4.0, 4.0, 6.0])
-K = 2.0
+def load_config(path):
+    with open(path) as f:
+        lines = [ln for ln in f if not ln.startswith("#")]
+    k, a, b, c, n = lines[0].split()
+    k = float(k)
+    semiaxes = np.array([float(a), float(b), float(c)])
+    data = np.array([[float(v) for v in ln.split()] for ln in lines[1:]])
+    points = data[:, 0:3]
+    e1 = data[:, 3:6]
+    e2 = data[:, 6:9]
+    return k, semiaxes, points, e1, e2
 
 
-def ellipsoid_point(theta, phi):
-    return SEMIAXES * np.array(
+def ellipsoid_point(theta, phi, semiaxes):
+    return semiaxes * np.array(
         [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
     )
 
 
-def ellipsoid_normal(x):
-    n = 2 * x / SEMIAXES**2
+def ellipsoid_normal(x, semiaxes):
+    n = 2 * x / semiaxes**2
     return n / np.linalg.norm(n)
 
 
-def tangent_pair(n):
-    seed = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-    e1 = tangential_projection(seed, n)
-    e1 /= np.linalg.norm(e1)
-    e2 = np.cross(n, e1)
-    return e1, e2
-
-
-def fibonacci_sphere(n):
-    i = np.arange(n) + 0.5
-    phi = np.arccos(1 - 2 * i / n)
-    theta = np.pi * (1 + 5**0.5) * i
-    return np.stack(
-        [np.sin(phi) * np.cos(theta), np.sin(phi) * np.sin(theta), np.cos(phi)], axis=1
+def boundary_collocation(semiaxes, n_theta=24, n_phi=48):
+    th, ph = np.meshgrid(
+        np.linspace(0, np.pi, n_theta),
+        np.linspace(0, 2 * np.pi, n_phi, endpoint=False),
+        indexing="ij",
     )
+    th, ph = th.ravel(), ph.ravel()
+    points = np.stack(
+        [ellipsoid_point(t, p, semiaxes) for t, p in zip(th, ph, strict=True)]
+    )
+    normals = np.stack([ellipsoid_normal(x, semiaxes) for x in points])
+    return points, normals
 
 
-def boundary_data(z, p, bnd_points, bnd_normals):
+def boundary_data(z, p, k, bnd_points, bnd_normals):
     h = np.stack(
         [
-            -tangential_projection(incident_field(x, z, K, p), n)
+            -tangential_projection(incident_field(x, z, k, p), n)
             for x, n in zip(bnd_points, bnd_normals, strict=True)
         ]
     )
@@ -71,34 +79,30 @@ def boundary_data(z, p, bnd_points, bnd_normals):
 
 
 def main():
-    n_recv = 12
     n_spectral = 256
     log_noise = -8.0
 
-    lam_points = fibonacci_sphere(n_recv)
-    lam_normals = lam_points
+    import argparse
 
+    p = argparse.ArgumentParser()
+    p.add_argument("config", nargs="?", default="res/config.txt")
+    args = p.parse_args()
+
+    k, semiaxes, points, e1, e2 = load_config(args.config)
+
+    # configs in 2*i + c order: point i, polarization e_c
     configs = []
-    for x, n in zip(lam_points, lam_normals, strict=True):
-        e1, e2 = tangent_pair(n)
-        configs.append((x, n, e1))
-        configs.append((x, n, e2))
+    for i in range(len(points)):
+        n = points[i] / np.linalg.norm(points[i])
+        configs.append((points[i], n, e1[i]))
+        configs.append((points[i], n, e2[i]))
     n_cfg = len(configs)
 
-    n_theta, n_phi = 24, 48
-    th, ph = np.meshgrid(
-        np.linspace(0, np.pi, n_theta),
-        np.linspace(0, 2 * np.pi, n_phi, endpoint=False),
-        indexing="ij",
-    )
-    th, ph = th.ravel(), ph.ravel()
-    bnd_points = np.stack([ellipsoid_point(t, p) for t, p in zip(th, ph, strict=True)])
-    bnd_normals = np.stack([ellipsoid_normal(x) for x in bnd_points])
+    bnd_points, bnd_normals = boundary_collocation(semiaxes)
     X_train = jnp.asarray(np.concatenate([bnd_points, bnd_normals], axis=1))
-
     X_query = jnp.asarray(np.stack([np.concatenate([x, n]) for x, n, _ in configs]))
 
-    kernel = TangentialMaxwellKernel(n_spectral=n_spectral, omega=K)
+    kernel = TangentialMaxwellKernel(n_spectral=n_spectral, omega=k)
     model = GaussianProcess(kernel, log_noise=log_noise)
 
     A, phi_train = model.compute_A_and_Phi(X_train)
@@ -107,8 +111,8 @@ def main():
     phi_query = kernel.feature_map(X_query)
 
     T = np.zeros((n_cfg, n_cfg), dtype=complex)
-    for j, (z, _n, p) in enumerate(configs):
-        y = boundary_data(z, p, bnd_points, bnd_normals)
+    for j, (z, _, p) in enumerate(configs):
+        y = boundary_data(z, p, k, bnd_points, bnd_normals)
         weights = jax.scipy.linalg.cho_solve((L, True), (phi_train @ y) / noise_var)
         field = np.asarray(phi_query.conj().T @ weights).reshape(n_cfg, 3)
         for i, (_, _, q) in enumerate(configs):
@@ -118,6 +122,9 @@ def main():
     print(f"operator shape: {T.shape}")
     print(f"||T - T^T|| / ||T|| = {asym:.3e}")
     print(f"||T|| = {np.linalg.norm(T):.4f}")
+
+    os.makedirs("out", exist_ok=True)
+    np.save("out/T_epgp.npy", T)
 
 
 if __name__ == "__main__":

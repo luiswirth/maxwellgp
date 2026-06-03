@@ -9,9 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
-
 # VSCode
 .vscode
 
 # macOS
 .DS_Store
+
+out/
