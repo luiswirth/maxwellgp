@@ -6,6 +6,39 @@ from jaxtyping import Array, Complex, Float
 from maxwellgp.kernel import MaxwellKernelLike
 
 
+class GaussianProcessPosterior(eqx.Module):
+    L: Complex[Array, "F F"]
+    mu_w: Complex[Array, "F J"]
+
+    def mean(self, Phi_q: Complex[Array, "F M"]) -> Complex[Array, "M J"]:
+        return Phi_q.conj().T @ self.mu_w
+
+    def var(self, Phi_q: Complex[Array, "F M"]) -> Float[Array, "M"]:
+        AinvPhi = jax.scipy.linalg.cho_solve((self.L, True), Phi_q)
+        return jnp.clip(jnp.real(jnp.sum(Phi_q.conj() * AinvPhi, axis=0)), a_min=0.0)
+
+    def cov_blocks(
+        self, Phi_q: Complex[Array, "F M"], n_comp: int
+    ) -> Complex[Array, "Nq C C"]:
+        AinvPhi = jax.scipy.linalg.cho_solve((self.L, True), Phi_q)
+        F = Phi_q.shape[0]
+        Pq = Phi_q.reshape(F, -1, n_comp)
+        Vq = AinvPhi.reshape(F, -1, n_comp)
+        return jnp.einsum("fnc,fnd->ncd", Pq.conj(), Vq)
+
+    def sample(
+        self, Phi_q: Complex[Array, "F M"], n_samples: int, key
+    ) -> Complex[Array, "n_samples M J"]:
+        F, J = self.mu_w.shape
+        zr = jax.random.normal(key, (2, F, J, n_samples), dtype=jnp.float64)
+        z = (zr[0] + 1j * zr[1]) / jnp.sqrt(2.0)
+        u = jax.scipy.linalg.solve_triangular(
+            self.L.conj().T, z.reshape(F, J * n_samples), lower=False
+        ).reshape(F, J, n_samples)
+        w = self.mu_w[:, :, None] + u
+        return jnp.einsum("fm,fjn->nmj", Phi_q.conj(), w)
+
+
 class GaussianProcess(eqx.Module):
     kernel: MaxwellKernelLike
     log_noise: Float[Array, ""]
@@ -14,33 +47,25 @@ class GaussianProcess(eqx.Module):
         self.kernel = kernel
         self.log_noise = jnp.array(log_noise, dtype=jnp.float64)
 
-    def compute_A_and_Phi(self, X: Float[Array, "N D"], jitter=1e-8):
+    def _factorize(self, X: Float[Array, "N D"], jitter=1e-8):
         phi = self.kernel.feature_map(X)
         W_diag = jnp.exp(self.kernel.log_weights).astype(jnp.complex128)
-        noise_var = jnp.exp(self.log_noise)
         A = (
             jnp.diag(W_diag)
-            + (phi @ phi.conj().T) / noise_var
+            + (phi @ phi.conj().T) / jnp.exp(self.log_noise)
             + jitter * jnp.eye(phi.shape[0])  # for numerical stability
         )
-        return A, phi
+        return jax.scipy.linalg.cholesky(A, lower=True), phi
 
     def nlml(
         self, X: Float[Array, "N D"], Y: Complex[Array, "M J"]
     ) -> Float[Array, ""]:
-        """Negative log marginal likelihood, summed over the columns of ``Y``.
-
-        ``Y`` may be a single response ``(M,)`` / ``(M, 1)`` or a matrix of ``J``
-        independent responses sharing the same covariance (e.g. one column per
-        excitation), in which case the determinant/normalizer term is counted J times.
-        """
         Y = Y.astype(jnp.complex128)
         if Y.ndim == 1:
             Y = Y[:, None]
         M, J = Y.shape
 
-        A, Phi = self.compute_A_and_Phi(X)
-        L = jax.scipy.linalg.cholesky(A, lower=True)
+        L, Phi = self._factorize(X)
         noise_var = jnp.exp(self.log_noise)
 
         Phi_Y = (Phi @ Y) / noise_var
@@ -57,20 +82,15 @@ class GaussianProcess(eqx.Module):
 
         return data_fit + J * (0.5 * logdet_C + 0.5 * M * jnp.log(2.0 * jnp.pi))
 
-    def posterior_mean(
+    def condition(
         self,
-        X_query: Float[Array, "Nq D"],
         X_train: Float[Array, "N D"],
-        y_train: Complex[Array, "M 1"],
-    ) -> Complex[Array, "Mq 1"]:
-        y_train = y_train.astype(jnp.complex128)
-        noise_var = jnp.exp(self.log_noise)
-
-        Phi_q = self.kernel.feature_map(X_query)
-
-        A, Phi_t = self.compute_A_and_Phi(X_train)
-        Phi_y = Phi_t @ y_train
-
-        L = jax.scipy.linalg.cholesky(A, lower=True)
-        fit_weights = jax.scipy.linalg.cho_solve((L, True), Phi_y / noise_var)
-        return Phi_q.conj().T @ fit_weights
+        y_train: Complex[Array, "M J"],
+        jitter=1e-8,
+    ) -> GaussianProcessPosterior:
+        Y = y_train.astype(jnp.complex128)
+        if Y.ndim == 1:
+            Y = Y[:, None]
+        L, Phi = self._factorize(X_train, jitter)
+        mu_w = jax.scipy.linalg.cho_solve((L, True), (Phi @ Y) / jnp.exp(self.log_noise))
+        return GaussianProcessPosterior(L, mu_w)

@@ -77,7 +77,7 @@ def optimize_log_noise(kernel, log_noise0, X_train, Y, steps, lr=0.05):
 
 
 def fit(args, semiaxes, k, Y):
-    """Build the boundary, condition the Maxwell-GP, return (model, weights)."""
+    """Build the boundary, condition the Maxwell-GP, return (model, posterior)."""
     bnd_points, bnd_normals = boundary_collocation(semiaxes, args.n_boundary)
     X_train = jnp.asarray(np.concatenate([bnd_points, bnd_normals], axis=1))
 
@@ -87,12 +87,7 @@ def fit(args, semiaxes, k, Y):
         log_noise, _ = optimize_log_noise(kernel, log_noise, X_train, Y, args.opt_steps)
         print(f"tuned log_noise = {log_noise:.4f} (eps={np.exp(log_noise):.3e})")
     model = GaussianProcess(kernel, log_noise=log_noise)
-
-    A, phi_train = model.compute_A_and_Phi(X_train, jitter=JITTER)
-    L = jax.scipy.linalg.cholesky(A, lower=True)
-    noise_var = jnp.exp(model.log_noise)
-    weights = jax.scipy.linalg.cho_solve((L, True), (phi_train @ Y) / noise_var)
-    return model, weights, A
+    return model, model.condition(X_train, Y, jitter=JITTER)
 
 
 # --- subcommand: reaction operator --------------------------------------------
@@ -112,18 +107,18 @@ def run_operator(args):
             for z, _, p in configs]
     Y = jnp.asarray(np.stack(cols, axis=1))
 
-    model, weights, A = fit(args, semiaxes, k, Y)
+    model, post = fit(args, semiaxes, k, Y)
 
     X_query = jnp.asarray(np.stack([np.concatenate([x, nrm]) for x, nrm, _ in configs]))
-    phi_query = model.kernel.feature_map(X_query)
-    field = np.asarray(phi_query.conj().T @ weights).reshape(n_cfg, 3, n_cfg)
+    field = np.asarray(post.mean(model.kernel.feature_map(X_query))).reshape(n_cfg, 3, n_cfg)
     Q = np.stack([q for _, _, q in configs])
     T = np.einsum("ic,icj->ij", Q, field)
 
+    cond_A = float(np.linalg.cond(np.asarray(post.L @ post.L.conj().T)))
     asym = np.linalg.norm(T - T.T) / np.linalg.norm(T)
     print(f"operator shape: {T.shape}  n_spectral={args.n_spectral}  n_boundary={args.n_boundary}")
     print(f"||T - T^T|| / ||T|| = {asym:.3e}")
-    print(f"||T|| = {np.linalg.norm(T):.4f}   cond(A) = {float(np.linalg.cond(np.asarray(A))):.3e}")
+    print(f"||T|| = {np.linalg.norm(T):.4f}   cond(A) = {cond_A:.3e}")
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     np.save(args.out, T)
@@ -142,7 +137,7 @@ def run_field(args):
     y = jnp.asarray(tangential_trace(incident_field_batch(bnd_points, z, k, p),
                                      bnd_normals).reshape(-1, 1))
 
-    model, weights, _ = fit(args, semiaxes, k, y)
+    model, post = fit(args, semiaxes, k, y)
 
     xs = np.linspace(-1.05 * a, 1.05 * a, args.ngrid)
     zs = np.linspace(-1.05 * c, 1.05 * c, args.ngrid)
@@ -152,7 +147,7 @@ def run_field(args):
     chunks = []
     for i in range(0, len(pts), args.batch):
         phi = model.kernel.feature_map.full(jnp.asarray(pts[i : i + args.batch]))
-        chunks.append(np.asarray(phi.conj().T @ weights))
+        chunks.append(np.asarray(post.mean(phi)))
     field6 = np.concatenate(chunks).reshape(-1, 6)
     Escat = field6[:, :3]
     Einc = incident_field_batch(pts, z, k, p)

@@ -1,4 +1,4 @@
-from maxwellgp.gp import GaussianProcess
+from maxwellgp.gp import GaussianProcess, GaussianProcessPosterior
 from maxwellgp.kernel import (
     FullMaxwellKernel,
     TangentialMaxwellKernel,
@@ -6,6 +6,7 @@ from maxwellgp.kernel import (
 
 __all__ = [
     "GaussianProcess",
+    "GaussianProcessPosterior",
     "FullMaxwellKernel",
     "TangentialMaxwellKernel",
 ]

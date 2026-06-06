@@ -99,7 +99,8 @@ def main():
 
         if i % 100 == 0:
             noise_val = jnp.exp(model.log_noise)
-            mu_train = model.posterior_mean(X_train, X_train, y_train_flat)
+            post = model.condition(X_train, y_train_flat)
+            mu_train = post.mean(model.kernel.feature_map(X_train))
             train_rmse = jnp.sqrt(jnp.mean((mu_train.real - y_train_flat.real) ** 2))
             print(
                 f"[{i:04d}] NLML: {loss_val.item():.4e} | "
@@ -107,7 +108,8 @@ def main():
             )
 
     # 6. Eval
-    mu_flat = model.posterior_mean(X_total, X_train, y_train_flat)
+    post = model.condition(X_train, y_train_flat)
+    mu_flat = post.mean(model.kernel.feature_map(X_total))
     mu_matrix = mu_flat.reshape(X_total.shape[0], 6)
     diff = mu_matrix - y_truth_matrix
     rmse_complex = jnp.sqrt(jnp.mean((diff.conj() * diff).real))
