@@ -57,13 +57,13 @@ class MaxwellFeatureMap(eqx.Module):
         """Directions, wavevectors and transverse (E, B) amplitudes per (dir, pol)."""
         kdirs = normalize(self.base_dirs_raw)  # (R, 3)
 
-        # Orthonormal polarization frame in the plane normal to k, by projecting
-        # the x- and y-axes and Gram-Schmidt orthogonalizing.
-        dot_x = kdirs[:, 0:1]
-        e1 = normalize(jnp.zeros_like(kdirs).at[:, 0].set(1.0) - dot_x * kdirs)
-        dot_y = kdirs[:, 1:2]
-        v2_raw = jnp.zeros_like(kdirs).at[:, 1].set(1.0) - dot_y * kdirs
-        e2 = normalize(v2_raw - jnp.sum(v2_raw * e1, axis=1, keepdims=True) * e1)
+        # Orthonormal polarization frame in the plane normal to k. Pivot on the
+        # coordinate axis least aligned with k (its smallest component): that axis
+        # is the most transverse, so the cross products stay well-conditioned for
+        # every direction, including those nearly parallel to an axis.
+        pivot = jax.nn.one_hot(jnp.argmin(jnp.abs(kdirs), axis=1), 3, dtype=kdirs.dtype)
+        e1 = normalize(jnp.cross(kdirs, pivot, axis=-1))
+        e2 = normalize(jnp.cross(kdirs, e1, axis=-1))
         pols = jnp.stack([e1, e2], axis=1)  # (R, 2, 3)
 
         k_vec = kdirs * jnp.array(self.omega, dtype=jnp.float64)
