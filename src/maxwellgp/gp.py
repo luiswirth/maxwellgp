@@ -26,28 +26,36 @@ class GaussianProcess(eqx.Module):
         return A, phi
 
     def nlml(
-        self, X: Float[Array, "N D"], y: Complex[Array, "M 1"]
+        self, X: Float[Array, "N D"], Y: Complex[Array, "M J"]
     ) -> Float[Array, ""]:
-        y = y.astype(jnp.complex128)
+        """Negative log marginal likelihood, summed over the columns of ``Y``.
+
+        ``Y`` may be a single response ``(M,)`` / ``(M, 1)`` or a matrix of ``J``
+        independent responses sharing the same covariance (e.g. one column per
+        excitation), in which case the determinant/normalizer term is counted J times.
+        """
+        Y = Y.astype(jnp.complex128)
+        if Y.ndim == 1:
+            Y = Y[:, None]
+        M, J = Y.shape
 
         A, Phi = self.compute_A_and_Phi(X)
         L = jax.scipy.linalg.cholesky(A, lower=True)
         noise_var = jnp.exp(self.log_noise)
 
-        Phi_y = Phi @ y
-        fit_weights = jax.scipy.linalg.cho_solve((L, True), Phi_y / noise_var)
+        Phi_Y = (Phi @ Y) / noise_var
+        fit = jax.scipy.linalg.cho_solve((L, True), Phi_Y)
 
-        y_norm_sq = jnp.vdot(y, y).real
-        fit_norm_sq = jnp.vdot(Phi_y / noise_var, fit_weights).real
-        data_fit = 0.5 * (y_norm_sq / noise_var - fit_norm_sq)
+        y_norm_sq = jnp.vdot(Y, Y).real
+        fit_term = jnp.sum((Phi_Y.conj() * fit).real)
+        data_fit = 0.5 * (y_norm_sq / noise_var - fit_term)
 
-        M = y.shape[0]
         # log det C = log det A + M log(sigma^2) - log det W
         logdet_A = 2.0 * jnp.sum(jnp.log(jnp.diagonal(L).real))
         logdet_W = jnp.sum(self.kernel.log_weights)
         logdet_C = logdet_A + M * self.log_noise - logdet_W
 
-        return data_fit + 0.5 * logdet_C + 0.5 * M * jnp.log(2.0 * jnp.pi)
+        return data_fit + J * (0.5 * logdet_C + 0.5 * M * jnp.log(2.0 * jnp.pi))
 
     def posterior_mean(
         self,

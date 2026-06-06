@@ -55,40 +55,22 @@ def tangential_trace(Ei, normals):
 
 # --- conditioning (shared fit) ------------------------------------------------
 
-def total_nlml(kernel, log_noise, X_train, Y):
-    phi = kernel.feature_map(X_train)
-    W = jnp.exp(kernel.log_weights).astype(jnp.complex128)
-    noise_var = jnp.exp(log_noise)
-    A = jnp.diag(W) + (phi @ phi.conj().T) / noise_var + JITTER * jnp.eye(phi.shape[0])
-    L = jax.scipy.linalg.cholesky(A, lower=True)
-
-    Phi_Y = (phi @ Y) / noise_var
-    fit = jax.scipy.linalg.cho_solve((L, True), Phi_Y)
-
-    M, J = Y.shape
-    y_norm_sq = jnp.vdot(Y, Y).real
-    fit_term = jnp.sum((Phi_Y.conj() * fit).real)
-    data_fit = 0.5 * (y_norm_sq / noise_var - fit_term)
-
-    logdet_A = 2.0 * jnp.sum(jnp.log(jnp.diagonal(L).real))
-    logdet_W = jnp.sum(kernel.log_weights)
-    logdet_C = logdet_A + M * log_noise - logdet_W
-    return data_fit + J * (0.5 * logdet_C + 0.5 * M * jnp.log(2.0 * jnp.pi))
-
-
 def optimize_log_noise(kernel, log_noise0, X_train, Y, steps, lr=0.05):
     ln = jnp.asarray(log_noise0)
     opt = optax.adam(lr)
     state = opt.init(ln)
 
+    def loss_of(ln):
+        return GaussianProcess(kernel, log_noise=ln).nlml(X_train, Y)
+
     @jax.jit
     def step(ln, state):
-        loss, g = jax.value_and_grad(lambda v: total_nlml(kernel, v, X_train, Y))(ln)
+        loss, g = jax.value_and_grad(loss_of)(ln)
         updates, state = opt.update(g, state)
         ln = jnp.clip(optax.apply_updates(ln, updates), -12.0, 0.0)
         return ln, state, loss
 
-    loss = total_nlml(kernel, ln, X_train, Y)
+    loss = loss_of(ln)
     for _ in range(steps):
         ln, state, loss = step(ln, state)
     return float(ln), float(loss)
