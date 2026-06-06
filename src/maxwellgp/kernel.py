@@ -14,18 +14,37 @@ class MaxwellKernelLike(Protocol):
     def feature_map(self, X: Float[Array, "N D"]) -> Complex[Array, "F M"]: ...
 
 
-class FullMaxwellFeatureMap(eqx.Module):
+class MaxwellFeatureMap(eqx.Module):
+    """Maxwell-constrained plane-wave feature map.
+
+    A single transverse plane-wave basis (one core), exposed through two linear
+    traces of the same fitted directions:
+      * ``full``        -> the 6-component field [E, B] at points X (N, 3)
+      * ``tangential``  -> the tangential trace pi_t E at oriented points X (N, 6)
+
+    ``trace`` selects which one ``__call__`` returns, so the map plugs into the GP
+    as the conditioning operator while the *same* instance still evaluates the full
+    field (no separate basis that could drift out of sync).
+    """
+
     base_dirs_raw: Float[Array, "n_spectral 3"]
     omega: float = eqx.field(static=True)
     n_spectral: int = eqx.field(static=True)
     n_pol: int = eqx.field(static=True)
+    trace: str = eqx.field(static=True)
 
     def __init__(
-        self, n_spectral: int, omega: float, key=None, init_jitter: float = 0.0
+        self,
+        n_spectral: int,
+        omega: float,
+        key=None,
+        init_jitter: float = 0.0,
+        trace: str = "full",
     ):
         self.n_spectral = int(n_spectral)
         self.n_pol = 2
         self.omega = float(omega)
+        self.trace = trace
 
         base = fibonacci_sphere(self.n_spectral)
         if init_jitter > 0.0 and key is not None:
@@ -34,142 +53,68 @@ class FullMaxwellFeatureMap(eqx.Module):
             )
         self.base_dirs_raw = normalize(base)
 
-    def __call__(self, X: Float[Array, "N 3"]) -> Complex[Array, "F 6N"]:
-        N = X.shape[0]
-        # Ensure unit norm
-        kdirs = normalize(self.base_dirs_raw)
+    def _core(self):
+        """Directions, wavevectors and transverse (E, B) amplitudes per (dir, pol)."""
+        kdirs = normalize(self.base_dirs_raw)  # (R, 3)
 
-        # --- Optimized Gram-Schmidt (Avoids constructing Nx3x3 matrices) ---
-        # We want to project the standard basis S (x and y axes) onto the plane normal to k
-        # V_raw = S - (S . k) * k
-
-        # 1. Basis vectors (1, 0, 0) and (0, 1, 0) broadcasted
-        # kdirs is (R, 3)
-
-        # Project Unit X: (1, 0, 0)
-        dot_x = kdirs[:, 0:1]  # (R, 1) represents dot(k, [1,0,0])
-        v1_raw = jnp.zeros_like(kdirs).at[:, 0].set(1.0) - dot_x * kdirs
-        e1 = normalize(v1_raw)  # (R, 3)
-
-        # Project Unit Y: (0, 1, 0)
+        # Orthonormal polarization frame in the plane normal to k, by projecting
+        # the x- and y-axes and Gram-Schmidt orthogonalizing.
+        dot_x = kdirs[:, 0:1]
+        e1 = normalize(jnp.zeros_like(kdirs).at[:, 0].set(1.0) - dot_x * kdirs)
         dot_y = kdirs[:, 1:2]
         v2_raw = jnp.zeros_like(kdirs).at[:, 1].set(1.0) - dot_y * kdirs
-
-        # Orthogonalize v2 against e1: v2 = v2_raw - (v2_raw . e1) * e1
-        dot_v2_e1 = jnp.sum(v2_raw * e1, axis=1, keepdims=True)
-        e2 = normalize(v2_raw - dot_v2_e1 * e1)  # (R, 3)
-
+        e2 = normalize(v2_raw - jnp.sum(v2_raw * e1, axis=1, keepdims=True) * e1)
         pols = jnp.stack([e1, e2], axis=1)  # (R, 2, 3)
 
-        # --- Coefficients ---
-        w = jnp.array(self.omega, dtype=jnp.float64)
-        k_vec = kdirs * w
-
-        # Cross products
-        # k_exp: (R, 1, 3), pols: (R, 2, 3)
+        k_vec = kdirs * jnp.array(self.omega, dtype=jnp.float64)
         cross_k_pi = jnp.cross(k_vec[:, None, :], pols, axis=-1)
+        E0 = -cross_k_pi  # (R, 2, 3)
+        B0 = jnp.cross(kdirs[:, None, :], cross_k_pi, axis=-1)  # (R, 2, 3)
+        return kdirs, k_vec, E0, B0
 
-        E = -cross_k_pi
-        B = jnp.cross(kdirs[:, None, :], cross_k_pi, axis=-1)
-
-        coeff6 = jnp.concatenate([E, B], axis=-1).astype(jnp.complex128)  # (R, 2, 6)
-
-        # --- Phases ---
-        # (N, 3) @ (R, 3).T -> (N, R)
-        phases = jnp.exp(1j * (X @ k_vec.T))
-
-        # Broadcast multiply: (R, 2, 6) * (N, R).T -> (R, 2, 6) * (R, N)
-        # We need output (F, 6N) where F = R*2
+    def full(self, X: Float[Array, "N 3"]) -> Complex[Array, "F 6N"]:
+        N = X.shape[0]
+        _, k_vec, E0, B0 = self._core()
+        coeff6 = jnp.concatenate([E0, B0], axis=-1).astype(jnp.complex128)  # (R, 2, 6)
+        phases = jnp.exp(1j * (X @ k_vec.T))  # (N, R)
         feat = jnp.einsum("rpc,nr->rpnc", coeff6, phases)
-
-        # Flatten r*p -> F, flatten n*c -> 6N
         return feat.reshape(self.n_spectral * self.n_pol, N * 6)
+
+    def tangential(self, X: Float[Array, "N 6"]) -> Complex[Array, "F 3N"]:
+        N = X.shape[0]
+        _, k_vec, E0, _ = self._core()
+        normals = X[:, 3:][None, None, :, :]  # (1, 1, N, 3)
+        E0_b = E0[:, :, None, :]  # (R, 2, 1, 3)
+        tE = E0_b - jnp.sum(E0_b * normals, axis=-1, keepdims=True) * normals
+        phases = jnp.exp(1j * (X[:, :3] @ k_vec.T))  # (N, R)
+        feat = jnp.einsum("rpnc,nr->rpnc", tE, phases)
+        return feat.reshape(self.n_spectral * self.n_pol, N * 3)
+
+    def __call__(self, X):
+        return self.full(X) if self.trace == "full" else self.tangential(X)
+
+
+def FullMaxwellFeatureMap(n_spectral, omega, key=None, init_jitter=0.0):
+    return MaxwellFeatureMap(n_spectral, omega, key, init_jitter, trace="full")
+
+
+def TangentialMaxwellFeatureMap(n_spectral, omega, key=None, init_jitter=0.0):
+    return MaxwellFeatureMap(n_spectral, omega, key, init_jitter, trace="tangential")
 
 
 class FullMaxwellKernel(eqx.Module):
-    feature_map: FullMaxwellFeatureMap
+    feature_map: MaxwellFeatureMap
     log_weights: Float[Array, "F"]
 
     def __init__(self, n_spectral: int, omega: float, key=None):
-        self.feature_map = FullMaxwellFeatureMap(
-            n_spectral, omega, key, init_jitter=0.0
-        )
+        self.feature_map = MaxwellFeatureMap(n_spectral, omega, key, trace="full")
         self.log_weights = jnp.zeros(n_spectral * 2, dtype=jnp.float64)
 
 
-class TangentialMaxwellFeatureMap(eqx.Module):
-    base_dirs_raw: Float[Array, "n_spectral 3"]
-    omega: float = eqx.field(static=True)
-    n_spectral: int = eqx.field(static=True)
-    n_pol: int = eqx.field(static=True)
-
-    def __init__(
-        self, n_spectral: int, omega: float, key=None, init_jitter: float = 0.0
-    ):
-        self.n_spectral = int(n_spectral)
-        self.n_pol = 2
-        self.omega = float(omega)
-
-        base = fibonacci_sphere(self.n_spectral)
-        if init_jitter > 0.0 and key is not None:
-            base = base + init_jitter * jax.random.normal(
-                key, base.shape, dtype=jnp.float64
-            )
-        self.base_dirs_raw = normalize(base)
-
-    def __call__(self, X: Float[Array, "N 6"]) -> Complex[Array, "F 3N"]:
-        N = X.shape[0]
-        # Ensure unit norm
-        kdirs = normalize(self.base_dirs_raw)
-
-        # --- Optimized Gram-Schmidt (Avoids constructing Nx3x3 matrices) ---
-        # We want to project the standard basis S (x and y axes) onto the plane normal to k
-        # V_raw = S - (S . k) * k
-
-        # 1. Basis vectors (1, 0, 0) and (0, 1, 0) broadcasted
-        # kdirs is (R, 3)
-
-        # Project Unit X: (1, 0, 0)
-        dot_x = kdirs[:, 0:1]  # (R, 1) represents dot(k, [1,0,0])
-        v1_raw = jnp.zeros_like(kdirs).at[:, 0].set(1.0) - dot_x * kdirs
-        e1 = normalize(v1_raw)  # (R, 3)
-
-        # Project Unit Y: (0, 1, 0)
-        dot_y = kdirs[:, 1:2]
-        v2_raw = jnp.zeros_like(kdirs).at[:, 1].set(1.0) - dot_y * kdirs
-
-        # Orthogonalize v2 against e1: v2 = v2_raw - (v2_raw . e1) * e1
-        dot_v2_e1 = jnp.sum(v2_raw * e1, axis=1, keepdims=True)
-        e2 = normalize(v2_raw - dot_v2_e1 * e1)  # (R, 3)
-
-        pols = jnp.stack([e1, e2], axis=1)  # (R, 2, 3)
-
-        # --- Coefficients ---
-        w = jnp.array(self.omega, dtype=jnp.float64)
-        k_vec = kdirs * w
-
-        # Cross products
-        # k_exp: (R, 1, 3), pols: (R, 2, 3)
-        cross_k_pi = jnp.cross(k_vec[:, None, :], pols, axis=-1)
-
-        # E0: (R,2,3) transverse amplitudes
-        E0 = -cross_k_pi
-
-        # Projection tangential trace:  pi_t E = E - (E . n) n
-        normals = X[:, 3:][None, None, :, :]  # (1,1,N,3)
-        E0_b = E0[:, :, None, :]  # (R,2,1,3)
-        dot_En = jnp.sum(E0_b * normals, axis=-1, keepdims=True)  # (R,2,N,1)
-        tE = E0_b - dot_En * normals  # (R,2,N,3)
-
-        phases = jnp.exp(1j * (X[:, :3] @ k_vec.T))  # (N,R)
-        feat = jnp.einsum("rpnc,nr->rpnc", tE, phases)
-        return feat.reshape(self.n_spectral * self.n_pol, N * 3)  # (F, 3N)
-
-
 class TangentialMaxwellKernel(eqx.Module):
-    feature_map: TangentialMaxwellFeatureMap
+    feature_map: MaxwellFeatureMap
     log_weights: Float[Array, "F"]  # prior weights
 
     def __init__(self, n_spectral: int, omega: float, key=None):
-        self.feature_map = TangentialMaxwellFeatureMap(n_spectral, omega, key)
+        self.feature_map = MaxwellFeatureMap(n_spectral, omega, key, trace="tangential")
         self.log_weights = jnp.zeros(n_spectral * 2, dtype=jnp.float64)

@@ -12,7 +12,6 @@ from cavity_operator import (
     optimize_log_noise,
 )
 from maxwellgp import GaussianProcess, TangentialMaxwellKernel
-from maxwellgp.kernel import FullMaxwellFeatureMap
 
 jax.config.update("jax_enable_x64", True)
 
@@ -81,10 +80,9 @@ def main():
     XX, ZZ = np.meshgrid(xs, zs)
     pts = np.stack([XX.ravel(), np.zeros(XX.size), ZZ.ravel()], axis=1)
 
-    full = FullMaxwellFeatureMap(n_spectral=args.n_spectral, omega=k)
     chunks = []
     for i in range(0, len(pts), args.batch):
-        phi = full(jnp.asarray(pts[i : i + args.batch]))
+        phi = model.kernel.feature_map.full(jnp.asarray(pts[i : i + args.batch]))
         chunks.append(np.asarray(phi.conj().T @ weights))
     field6 = np.concatenate(chunks).reshape(-1, 6)
     Escat = field6[:, :3]
