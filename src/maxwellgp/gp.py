@@ -15,7 +15,7 @@ class GaussianProcessPosterior(eqx.Module):
 
     def var(self, Phi_q: Complex[Array, "F M"]) -> Float[Array, "M"]:
         AinvPhi = jax.scipy.linalg.cho_solve((self.L, True), Phi_q)
-        return jnp.clip(jnp.real(jnp.sum(Phi_q.conj() * AinvPhi, axis=0)), a_min=0.0)
+        return jnp.clip(jnp.real(jnp.sum(Phi_q.conj() * AinvPhi, axis=0)), min=0.0)
 
     def cov_blocks(
         self, Phi_q: Complex[Array, "F M"], n_comp: int
