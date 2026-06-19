@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Literal, get_args
 
 import equinox as eqx
 import jax
@@ -7,31 +7,14 @@ from jaxtyping import Array, Complex, Float
 
 from maxwellgp.utils import fibonacci_sphere, normalize
 
-
-class MaxwellKernelLike(Protocol):
-    log_weights: Float[Array, "F"]
-
-    def feature_map(self, X: Float[Array, "N D"]) -> Complex[Array, "F M"]: ...
+Trace = Literal["full", "tangential"]
 
 
 class MaxwellFeatureMap(eqx.Module):
-    """Maxwell-constrained plane-wave feature map.
-
-    A single transverse plane-wave basis (one core), exposed through two linear
-    traces of the same fitted directions:
-      * ``full``        -> the 6-component field [E, B] at points X (N, 3)
-      * ``tangential``  -> the tangential trace pi_t E at oriented points X (N, 6)
-
-    ``trace`` selects which one ``__call__`` returns, so the map plugs into the GP
-    as the conditioning operator while the *same* instance still evaluates the full
-    field (no separate basis that could drift out of sync).
-    """
-
     base_dirs_raw: Float[Array, "n_spectral 3"]
     omega: float = eqx.field(static=True)
     n_spectral: int = eqx.field(static=True)
     n_pol: int = eqx.field(static=True)
-    trace: str = eqx.field(static=True)
 
     def __init__(
         self,
@@ -39,12 +22,10 @@ class MaxwellFeatureMap(eqx.Module):
         omega: float,
         key=None,
         init_jitter: float = 0.0,
-        trace: str = "full",
     ):
         self.n_spectral = int(n_spectral)
         self.n_pol = 2
         self.omega = float(omega)
-        self.trace = trace
 
         base = fibonacci_sphere(self.n_spectral)
         if init_jitter > 0.0 and key is not None:
@@ -57,10 +38,7 @@ class MaxwellFeatureMap(eqx.Module):
         """Directions, wavevectors and transverse (E, B) amplitudes per (dir, pol)."""
         kdirs = normalize(self.base_dirs_raw)  # (R, 3)
 
-        # Orthonormal polarization frame in the plane normal to k. Pivot on the
-        # coordinate axis least aligned with k (its smallest component): that axis
-        # is the most transverse, so the cross products stay well-conditioned for
-        # every direction, including those nearly parallel to an axis.
+        # Pivot on the coordinate axis least aligned with k (its smallest component).
         pivot = jax.nn.one_hot(jnp.argmin(jnp.abs(kdirs), axis=1), 3, dtype=kdirs.dtype)
         e1 = normalize(jnp.cross(kdirs, pivot, axis=-1))
         e2 = normalize(jnp.cross(kdirs, e1, axis=-1))
@@ -90,31 +68,19 @@ class MaxwellFeatureMap(eqx.Module):
         feat = jnp.einsum("rpnc,nr->rpnc", tE, phases)
         return feat.reshape(self.n_spectral * self.n_pol, N * 3)
 
-    def __call__(self, X):
-        return self.full(X) if self.trace == "full" else self.tangential(X)
 
-
-def FullMaxwellFeatureMap(n_spectral, omega, key=None, init_jitter=0.0):
-    return MaxwellFeatureMap(n_spectral, omega, key, init_jitter, trace="full")
-
-
-def TangentialMaxwellFeatureMap(n_spectral, omega, key=None, init_jitter=0.0):
-    return MaxwellFeatureMap(n_spectral, omega, key, init_jitter, trace="tangential")
-
-
-class FullMaxwellKernel(eqx.Module):
+class MaxwellKernel(eqx.Module):
     feature_map: MaxwellFeatureMap
     log_weights: Float[Array, "F"]
+    trace: Trace = eqx.field(static=True)
 
-    def __init__(self, n_spectral: int, omega: float, key=None):
-        self.feature_map = MaxwellFeatureMap(n_spectral, omega, key, trace="full")
+    def __init__(self, n_spectral: int, omega: float, key=None, trace: Trace = "full"):
+        assert trace in get_args(Trace), f"invalid trace: {trace!r}"
+        self.feature_map = MaxwellFeatureMap(n_spectral, omega, key)
         self.log_weights = jnp.zeros(n_spectral * 2, dtype=jnp.float64)
+        self.trace = trace
 
-
-class TangentialMaxwellKernel(eqx.Module):
-    feature_map: MaxwellFeatureMap
-    log_weights: Float[Array, "F"]  # prior weights
-
-    def __init__(self, n_spectral: int, omega: float, key=None):
-        self.feature_map = MaxwellFeatureMap(n_spectral, omega, key, trace="tangential")
-        self.log_weights = jnp.zeros(n_spectral * 2, dtype=jnp.float64)
+    def features(self, X):
+        if self.trace == "tangential":
+            return self.feature_map.tangential(X)
+        return self.feature_map.full(X)

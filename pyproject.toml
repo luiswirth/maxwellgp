@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Ehrenpreis Palamodov Gaussian Process for Maxwell's Equations"
 readme = "README.md"
 authors = [
-    { name = "Félix Vittori", email = "vittorifelix@gmail.com" },
+    { name = "Félix Lino Vittori", email = "vittorifelix@gmail.com" },
     { name = "Luis Wirth", email = "lwirth2000@gmail.com" },
 ]
 requires-python = ">=3.12"

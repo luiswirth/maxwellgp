@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from maxwellgp import FullMaxwellKernel, GaussianProcess
+from maxwellgp import GaussianProcess, MaxwellKernel
 from maxwellgp.utils import normalize
 
 # Enable x64
@@ -46,7 +46,7 @@ def main():
     y_train_flat = y_truth_matrix[indices].reshape(-1, 1)
 
     # 2. Model Init
-    kernel = FullMaxwellKernel(n_spectral=12, omega=omega, key=k2)
+    kernel = MaxwellKernel(n_spectral=12, omega=omega, key=k2)
     # Note: We pass X_train, but it is stored as a static field now
     model = GaussianProcess(kernel, log_noise=-12.0)
 
@@ -100,7 +100,7 @@ def main():
         if i % 100 == 0:
             noise_val = jnp.exp(model.log_noise)
             post = model.condition(X_train, y_train_flat)
-            mu_train = post.mean(model.kernel.feature_map(X_train))
+            mu_train = post.mean(model.kernel.features(X_train))
             train_rmse = jnp.sqrt(jnp.mean((mu_train.real - y_train_flat.real) ** 2))
             print(
                 f"[{i:04d}] NLML: {loss_val.item():.4e} | "
@@ -109,7 +109,7 @@ def main():
 
     # 6. Eval
     post = model.condition(X_train, y_train_flat)
-    mu_flat = post.mean(model.kernel.feature_map(X_total))
+    mu_flat = post.mean(model.kernel.features(X_total))
     mu_matrix = mu_flat.reshape(X_total.shape[0], 6)
     diff = mu_matrix - y_truth_matrix
     rmse_complex = jnp.sqrt(jnp.mean((diff.conj() * diff).real))
