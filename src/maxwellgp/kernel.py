@@ -12,20 +12,20 @@ Trace = Literal["full", "tangential"]
 
 class MaxwellFeatureMap(eqx.Module):
     base_dirs_raw: Float[Array, "n_spectral 3"]
-    omega: float = eqx.field(static=True)
+    wavenumber: float = eqx.field(static=True)
     n_spectral: int = eqx.field(static=True)
     n_pol: int = eqx.field(static=True)
 
     def __init__(
         self,
         n_spectral: int,
-        omega: float,
+        wavenumber: float,
         key=None,
         init_jitter: float = 0.0,
     ):
         self.n_spectral = int(n_spectral)
         self.n_pol = 2
-        self.omega = float(omega)
+        self.wavenumber = float(wavenumber)
 
         base = fibonacci_sphere(self.n_spectral)
         if init_jitter > 0.0 and key is not None:
@@ -44,7 +44,7 @@ class MaxwellFeatureMap(eqx.Module):
         e2 = normalize(jnp.cross(kdirs, e1, axis=-1))
         pols = jnp.stack([e1, e2], axis=1)  # (R, 2, 3)
 
-        k_vec = kdirs * jnp.array(self.omega, dtype=jnp.float64)
+        k_vec = kdirs * jnp.array(self.wavenumber, dtype=jnp.float64)
         cross_k_pi = jnp.cross(k_vec[:, None, :], pols, axis=-1)
         E0 = -cross_k_pi  # (R, 2, 3)
         B0 = jnp.cross(kdirs[:, None, :], cross_k_pi, axis=-1)  # (R, 2, 3)
@@ -74,9 +74,9 @@ class MaxwellKernel(eqx.Module):
     log_weights: Float[Array, "F"]
     trace: Trace = eqx.field(static=True)
 
-    def __init__(self, n_spectral: int, omega: float, key=None, trace: Trace = "full"):
+    def __init__(self, n_spectral: int, wavenumber: float, key=None, trace: Trace = "full"):
         assert trace in get_args(Trace), f"invalid trace: {trace!r}"
-        self.feature_map = MaxwellFeatureMap(n_spectral, omega, key)
+        self.feature_map = MaxwellFeatureMap(n_spectral, wavenumber, key)
         self.log_weights = jnp.zeros(n_spectral * 2, dtype=jnp.float64)
         self.trace = trace
 

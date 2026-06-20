@@ -10,7 +10,7 @@ from maxwellgp.utils import normalize
 jax.config.update("jax_enable_x64", True)
 
 
-def get_ground_truth(X, omega):
+def get_ground_truth(X, wavenumber):
     EE0s = jnp.array(
         [[-2, 0, 1], [1, 1, 0], [1, -1, -1], [3, 2, 1], [-7, 2, 3]], dtype=jnp.float64
     )
@@ -19,7 +19,7 @@ def get_ground_truth(X, omega):
     )
 
     k_norm = normalize(k0_dirs)
-    k_vecs = k_norm * omega
+    k_vecs = k_norm * wavenumber
     phases = jnp.exp(1j * jnp.dot(X, k_vecs.T))
     BB0s = jnp.cross(k_norm, EE0s)
 
@@ -33,12 +33,12 @@ def main():
     k1, k2 = jax.random.split(key, 2)
 
     # 1. Data Gen
-    omega = 2.0 * jnp.pi
+    wavenumber = 2.0 * jnp.pi
     axis = jnp.linspace(-1, 1, 20, dtype=jnp.float64)  # Reduced size for speed in demo
     X1, X2, X3 = jnp.meshgrid(axis, axis, axis, indexing="ij")
     X_total = jnp.stack([X1.ravel(), X2.ravel(), X3.ravel()], axis=-1)
 
-    y_truth_matrix = get_ground_truth(X_total, omega)
+    y_truth_matrix = get_ground_truth(X_total, wavenumber)
 
     n_train = 100
     indices = jax.random.permutation(k1, X_total.shape[0])[:n_train]
@@ -46,7 +46,7 @@ def main():
     y_train_flat = y_truth_matrix[indices].reshape(-1, 1)
 
     # 2. Model Init
-    kernel = MaxwellKernel(n_spectral=12, omega=omega, key=k2)
+    kernel = MaxwellKernel(n_spectral=12, wavenumber=wavenumber, key=k2)
     # Note: We pass X_train, but it is stored as a static field now
     model = GaussianProcess(kernel, log_noise=-12.0)
 
