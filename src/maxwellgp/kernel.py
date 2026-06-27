@@ -35,7 +35,6 @@ class MaxwellFeatureMap(eqx.Module):
         self.base_dirs_raw = normalize(base)
 
     def _core(self):
-        """Directions, wavevectors and transverse (E, B) amplitudes per (dir, pol)."""
         kdirs = normalize(self.base_dirs_raw)  # (R, 3)
 
         # Pivot on the coordinate axis least aligned with k (its smallest component).

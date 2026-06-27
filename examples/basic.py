@@ -6,7 +6,6 @@ import optax
 from maxwellgp import GaussianProcess, MaxwellKernel
 from maxwellgp.utils import normalize
 
-# Enable x64
 jax.config.update("jax_enable_x64", True)
 
 
@@ -32,9 +31,8 @@ def main():
     key = jax.random.PRNGKey(42)
     k1, k2 = jax.random.split(key, 2)
 
-    # 1. Data Gen
     wavenumber = 2.0 * jnp.pi
-    axis = jnp.linspace(-1, 1, 20, dtype=jnp.float64)  # Reduced size for speed in demo
+    axis = jnp.linspace(-1, 1, 20, dtype=jnp.float64)
     X1, X2, X3 = jnp.meshgrid(axis, axis, axis, indexing="ij")
     X_total = jnp.stack([X1.ravel(), X2.ravel(), X3.ravel()], axis=-1)
 
@@ -45,16 +43,10 @@ def main():
     X_train = X_total[indices]
     y_train_flat = y_truth_matrix[indices].reshape(-1, 1)
 
-    # 2. Model Init
     kernel = MaxwellKernel(n_spectral=12, wavenumber=wavenumber, key=k2)
-    # Note: We pass X_train, but it is stored as a static field now
     model = GaussianProcess(kernel, log_noise=-12.0)
 
-    # 3. Optimizer Setup
-    # We partition parameters to apply different settings
     lr_map, lr_gp = 2e-3, 5e-3
-
-    # More robust: filter by instance
     filter_spec = jax.tree.map(lambda _: "gp", model)
     filter_spec = eqx.tree_at(
         lambda m: m.kernel.feature_map,
@@ -70,11 +62,9 @@ def main():
         filter_spec,
     )
 
-    # Filter out static fields (Equinox handles this, but optax expects pure arrays)
     params = eqx.filter(model, eqx.is_inexact_array)
     opt_state = optim.init(params)
 
-    # 4. Update Step
     @eqx.filter_jit
     def step(model, opt_state, X, y):
         def loss_fn(m):
@@ -92,7 +82,6 @@ def main():
 
         return loss, new_model, new_opt_state
 
-    # 5. Loop
     print(f"Training on {n_train} points...")
     for i in range(1001):
         loss_val, model, opt_state = step(model, opt_state, X_train, y_train_flat)
@@ -107,7 +96,6 @@ def main():
                 f"eps: {noise_val:.2e} | Train RMSE: {train_rmse:.4e}"
             )
 
-    # 6. Eval
     post = model.condition(X_train, y_train_flat)
     mu_flat = post.mean(model.kernel.features(X_total))
     mu_matrix = mu_flat.reshape(X_total.shape[0], 6)
