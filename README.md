@@ -8,7 +8,7 @@ interior field observations) are fit.
 
 This is the general-purpose solver core. The cavity-specific physics and the
 reaction-operator assembly live in
-[cavity-epgp](https://github.com/luiswirth/cavity-epgp), which depends on this
+[cavity-maxwell](https://github.com/luiswirth/cavity-maxwell), which depends on this
 package.
 
 ## Public API
